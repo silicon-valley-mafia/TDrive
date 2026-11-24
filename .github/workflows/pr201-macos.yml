@@ -1,0 +1,92 @@
+name: PR201 macOS
+
+on:
+  push:
+    branches:
+      - ci/pr201-macos
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  webkit-media-contracts:
+    name: WebKit media contracts
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install WebKit
+        working-directory: frontend
+        run: npx playwright install webkit
+      - name: Run WebKit media contracts
+        working-directory: frontend
+        run: |
+          set -o pipefail
+          npm run test:e2e -- --project=webkit-media 2>&1 | tee "$RUNNER_TEMP/webkit.log"
+      - name: Report result
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/webkit.log" ]; then
+            grep -E '([0-9]+ (passed|failed|flaky|skipped))|Error:|✘' "$RUNNER_TEMP/webkit.log" | tail -n 20 | while IFS= read -r line; do echo "::notice::$line"; done
+          fi
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pr201-webkit-media-failure
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  ios-build:
+    name: iOS build (simulator bundle + device archive)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GOFLAGS: ""
+      CGO_ENABLED: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build the simulator app bundle
+        run: wails3 task ios:package
+      - name: Compile the device archive
+        run: wails3 task ios:build IOS_PLATFORM=device
+      - name: Verify the generated Xcode release bundle
+        run: |
+          wails3 task -f ios:generate:ios:xcode
+          xcodebuild -project build/ios/xcode/main.xcodeproj -target TDrive \
+            -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO clean build
+          APP=build/ios/xcode/build/Release-iphoneos/TDrive.app
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          test -x "$APP/$EXECUTABLE"
+          echo "::notice::iOS device app built: $APP/$EXECUTABLE"
