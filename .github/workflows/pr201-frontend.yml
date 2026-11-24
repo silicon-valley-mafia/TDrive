@@ -1,22 +1,25 @@
 name: PR201 frontend checks
 
 # Test-only workflow on the fork branch ci/pr201-frontend. Never part of PR #201.
-# Runs 1 and 2 passed everything except the macOS job, which never got a
-# runner. This run retries only that job: visual baselines and media in WebKit.
+# Earlier runs passed every frontend suite. This run renders the path bar in
+# Chromium (the engine WebView2 uses on Windows) and commits the PNGs to
+# frontend/pr201-shots on this branch for review.
 
 on:
   push:
     branches:
       - ci/pr201-frontend
+    paths-ignore:
+      - frontend/pr201-shots/**
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  webkit-media:
-    name: webkit media and visual (macOS)
-    runs-on: macos-15
+  shots:
+    name: path bar screenshots (chromium)
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -28,27 +31,36 @@ jobs:
       - name: npm ci
         working-directory: frontend
         run: npm ci
-      - name: install webkit
+      - name: install chromium
         working-directory: frontend
-        run: npx playwright install webkit
-      - name: e2e webkit-media
+        run: npx playwright install --with-deps chromium
+      - name: render
         working-directory: frontend
         shell: bash
         run: |
           set -u
-          log="$RUNNER_TEMP/e2e.log"
-          npm run test:e2e -- --project=webkit-media --reporter=line > "$log" 2>&1
+          mkdir -p pr201-shots
+          log="$RUNNER_TEMP/shots.log"
+          npx playwright test e2e/pr201-shots.spec.ts --project=chromium --reporter=line > "$log" 2>&1
           status=$?
           cat "$log"
+          ls -la pr201-shots
           kind=notice; [ "$status" -ne 0 ] && kind=error
-          body=$(grep -v '^\[[0-9]*/[0-9]*\]' "$log" | tail -c 7000 | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-          echo "::${kind} title=webkit-media exit ${status}::${body}"
-          exit $status
-      - name: upload failures
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: webkit-media-failures
-          path: frontend/test-results
-          if-no-files-found: ignore
-          retention-days: 7
+          body=$( { grep -v '^\[[0-9]*/[0-9]*\]' "$log" | tail -c 6000; echo; ls pr201-shots; } | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::${kind} title=shots exit ${status}::${body}"
+          echo "status=$status" >> "$GITHUB_ENV"
+      - name: commit screenshots
+        shell: bash
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/pr201-shots
+          if git diff --cached --quiet; then
+            echo "::warning title=commit::no screenshots to commit"
+          else
+            git commit -m "test: path bar screenshots from run ${GITHUB_RUN_ID}"
+            git push origin HEAD:ci/pr201-frontend
+            echo "::notice title=commit::$(git rev-parse HEAD)"
+          fi
+          exit "$status"
