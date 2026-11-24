@@ -70,6 +70,23 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('/a'.repeat(300))).toEqual({ kind: 'too-long' });
         expect(parseDrivePath('x'.repeat(5000))).toEqual({ kind: 'too-long' });
     });
+
+    it('flags macOS and Linux paths copied from this computer', () => {
+        for (const text of [
+            '/Users/me/Taxes', '"/Volumes/Backup/Docs"', '/home/me', '/private/var/tmp', '/tmp/x',
+            '~', '~/Documents', '~me/Docs', '$HOME/Docs', '${HOME}/Docs', '%USERPROFILE%\\Docs',
+            '/media/me/usb', '/run/media/me/usb',
+        ]) {
+            expect(parsed(text).localHint, text).toBe(true);
+        }
+        for (const text of [
+            '/Users', '/users/me', 'Users/me', '/Applications/Acme', '/Library/x', '/media/usb',
+            '/run/x/y', '/Team/Projects', '/~/x', 'My Drive / Users / me', '/Homework/x',
+            '/Users/', '/home/', '/tmpfiles/x', '/Userspace/x',
+        ]) {
+            expect(parsed(text).localHint, text).toBeUndefined();
+        }
+    });
 });
 
 describe('matchName', () => {
@@ -183,6 +200,35 @@ describe('resolveDrivePath', () => {
         await expect(resolveDrivePath(parsed('/Elsewhere/Team'), roots, source())).resolves.toMatchObject({ kind: 'not-found', name: 'Elsewhere' });
     });
 
+    it('notes that a missing computer path may be one, but still opens a drive folder of that name', async () => {
+        await expect(resolveDrivePath(parsed('/Users/me/Taxes'), roots, source())).resolves.toEqual({
+            kind: 'not-found', name: 'Users', parent: [], maybeLocal: true,
+        });
+        await expect(resolveDrivePath(parsed('~/Documents'), roots, source())).resolves.toEqual({
+            kind: 'not-found', name: '~', parent: [], maybeLocal: true,
+        });
+
+        const users = {
+            '': { folders: [{ id: 'd:users', name: 'Users' }], files: [{ msgId: 5, name: 'home' }] },
+            'd:users': { folders: [{ id: 'd:me', name: 'me' }], files: [] },
+        };
+        await expect(resolveDrivePath(parsed('/Users/me'), roots, source(users))).resolves.toEqual({
+            kind: 'folder', path: [{ id: 'd:users', name: 'Users' }, { id: 'd:me', name: 'me' }],
+        });
+        // Past the root the miss is inside the drive, so the plain message stands.
+        await expect(resolveDrivePath(parsed('/Users/nobody/x'), roots, source(users))).resolves.toEqual({
+            kind: 'not-found', name: 'nobody', parent: ['Users'],
+        });
+        // A root file of that name is reported as a file, not as a computer path.
+        await expect(resolveDrivePath(parsed('/home/me'), roots, source(users))).resolves.toEqual({
+            kind: 'not-a-folder', name: 'home', parent: [],
+        });
+        // Without the computer shape a root miss keeps the plain message.
+        await expect(resolveDrivePath(parsed('/users/me'), roots, source())).resolves.toEqual({
+            kind: 'not-found', name: 'users', parent: [],
+        });
+    });
+
     it('matches a leading space in a name before trimming it', async () => {
         await expect(resolveDrivePath(parsed('/ Spaced'), roots, source())).resolves.toEqual({
             kind: 'folder', path: [{ id: 'd:spaced', name: ' Spaced' }],
@@ -217,6 +263,9 @@ describe('describeDrivePathFailure', () => {
             .toBe('"a.pdf" in /Docs is a file, not a folder.');
         expect(describeDrivePathFailure({ kind: 'ambiguous', name: 'x', parent: [] }, 'My Drive'))
             .toBe('More than one item in My Drive is named "x".');
+        expect(describeDrivePathFailure({ kind: 'not-found', name: 'Users', parent: [], maybeLocal: true }, 'My Drive'))
+            .toBe('"Users" was not found in My Drive. If that is a path on this computer, it cannot be opened here. '
+                + 'Type a path such as /Documents/Taxes.');
         expect(describeDrivePathFailure({ kind: 'local' }, 'My Drive')).toContain('path on this computer');
         expect(describeDrivePathFailure({ kind: 'link' }, 'My Drive')).toContain('link');
         expect(describeDrivePathFailure({ kind: 'empty' }, 'My Drive')).toBe('Type a path such as /Documents/Taxes.');

@@ -21,6 +21,9 @@ export interface ParsedDrivePath {
     segments: string[];
     // A trailing separator names a folder, the way Finder's Go to Folder reads it.
     folderOnly: boolean;
+    // Shaped like a macOS or Linux path on this computer (/Users/me/..., ~/...).
+    // Only worded into a miss at the root; a drive folder of that name still opens.
+    localHint?: true;
 }
 
 export type DrivePathTarget =
@@ -32,7 +35,7 @@ export type DrivePathFailure =
     | { kind: 'local' }
     | { kind: 'link' }
     | { kind: 'too-long' }
-    | { kind: 'not-found' | 'not-a-folder' | 'ambiguous'; name: string; parent: string[] };
+    | { kind: 'not-found' | 'not-a-folder' | 'ambiguous'; name: string; parent: string[]; maybeLocal?: true };
 
 export interface DrivePathSource {
     /** Subfolders and files of one folder; '' is the drive root. */
@@ -81,7 +84,22 @@ export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure
         segments.push(segment);
     }
     if (segments.length > MAX_SEGMENTS) return { kind: 'too-long' };
-    return { segments, folderOnly: segments.length > 0 && /[\\/]\s*$/.test(value) };
+    const parsed: ParsedDrivePath = { segments, folderOnly: segments.length > 0 && /[\\/]\s*$/.test(value) };
+    if (looksLikeComputerPath(value, segments.length)) parsed.localHint = true;
+    return parsed;
+}
+
+// Top folders of macOS and Linux disks, matched in their exact case. Names a
+// drive is likely to hold too (Applications, Library, System) are left out.
+const COMPUTER_ROOTS = /^[\\/](?:Users|Volumes|home|private|mnt|usr|var|etc|tmp|opt)[\\/]/;
+const COMPUTER_MEDIA = /^[\\/](?:run[\\/])?media[\\/]/;
+const HOME_SHORTHAND = /^(?:~|\$\{?HOME\b|%[A-Za-z_][A-Za-z0-9_]*%)/;
+
+/** True for text shaped like a macOS or Linux path copied from this computer. */
+function looksLikeComputerPath(value: string, segmentCount: number): boolean {
+    if (HOME_SHORTHAND.test(value)) return true;
+    if (COMPUTER_ROOTS.test(value)) return segmentCount >= 2;
+    return COMPUTER_MEDIA.test(value) && segmentCount >= 3;
 }
 
 function looseKey(name: string): string {
@@ -165,6 +183,11 @@ export async function resolveDrivePath(
     const missedAtRoot = result !== null && (result.kind === 'not-found' || result.kind === 'not-a-folder')
         && result.parent.length === 0;
     if (!missedAtRoot || first === undefined || matchName(rootNames.map((name) => ({ name })), first).length === 0) {
+        // "/Users/me/Taxes" missing from the drive is most likely a path on
+        // this computer; say so, without claiming it, since the guess can be wrong.
+        if (parsed.localHint && result !== null && result.kind === 'not-found' && result.parent.length === 0) {
+            return { ...result, maybeLocal: true };
+        }
         return result;
     }
     const rest = parsed.segments.slice(1);
@@ -192,7 +215,11 @@ export function describeDrivePathFailure(failure: DrivePathFailure, rootLabel: s
             const where = failure.parent.length ? formatDrivePath(failure.parent) : rootLabel;
             if (failure.kind === 'not-a-folder') return `"${failure.name}" in ${where} is a file, not a folder.`;
             if (failure.kind === 'ambiguous') return `More than one item in ${where} is named "${failure.name}".`;
-            return `"${failure.name}" was not found in ${where}.`;
+            const missing = `"${failure.name}" was not found in ${where}.`;
+            if (failure.kind === 'not-found' && failure.maybeLocal) {
+                return `${missing} If that is a path on this computer, it cannot be opened here. ${example}`;
+            }
+            return missing;
         }
     }
 }
