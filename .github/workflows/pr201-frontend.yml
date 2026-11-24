@@ -1,16 +1,14 @@
 name: PR201 frontend checks
 
 # Test-only workflow on the fork branch ci/pr201-frontend. Never part of PR #201.
-# Run 1 (typecheck, lint, vitest, build, chromium e2e) passed; this run covers
-# the WebKit jobs: visual baselines and media on macOS, gallery on Linux.
+# Runs 1 and 2 passed everything except the macOS job, which never got a
+# runner. This run retries only that job: visual baselines and media in WebKit.
 
 on:
   push:
     branches:
       - ci/pr201-frontend
   workflow_dispatch:
-  repository_dispatch:
-    types: [pr201-frontend]
 
 permissions:
   contents: read
@@ -54,34 +52,3 @@ jobs:
           path: frontend/test-results
           if-no-files-found: ignore
           retention-days: 7
-
-  gallery-webkit:
-    name: webkit gallery (Linux)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: npm ci
-        working-directory: frontend
-        run: npm ci
-      - name: install webkit
-        working-directory: frontend
-        run: npx playwright install --with-deps webkit
-      - name: gallery
-        working-directory: frontend
-        shell: bash
-        run: |
-          set -u
-          log="$RUNNER_TEMP/gallery.log"
-          npx playwright test --config playwright.gallery-webkit.config.ts --reporter=line > "$log" 2>&1
-          status=$?
-          cat "$log"
-          kind=notice; [ "$status" -ne 0 ] && kind=error
-          body=$(grep -v '^\[[0-9]*/[0-9]*\]' "$log" | tail -c 7000 | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-          echo "::${kind} title=gallery webkit exit ${status}::${body}"
-          exit $status
