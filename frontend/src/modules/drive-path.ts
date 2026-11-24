@@ -21,7 +21,7 @@ export interface ParsedDrivePath {
     segments: string[];
     // A trailing separator names a folder, the way Finder's Go to Folder reads it.
     folderOnly: boolean;
-    // Shaped like a macOS or Linux path on this computer (/Users/me/..., ~/...).
+    // Shaped like a path on this computer without a drive letter (/Users/me/..., ~/...).
     // Only worded into a miss at the root; a drive folder of that name still opens.
     localHint?: true;
 }
@@ -63,6 +63,7 @@ export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure
     const value = stripQuotes(line);
     if (!value) return { kind: 'empty' };
     if (value.length > MAX_PATH_LENGTH) return { kind: 'too-long' };
+    if (/^file:\/\//i.test(value)) return { kind: 'local' };
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return { kind: 'link' };
     // Drive names can never hold a colon, so C:\... and \\server\... are paths
     // on this computer rather than in the drive.
@@ -89,13 +90,17 @@ export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure
     return parsed;
 }
 
-// Top folders of macOS and Linux disks, matched in their exact case. Names a
-// drive is likely to hold too (Applications, Library, System) are left out.
-const COMPUTER_ROOTS = /^[\\/](?:Users|Volumes|home|private|mnt|usr|var|etc|tmp|opt)[\\/]/;
+// Top folders of macOS and Linux disks, matched in their exact case, plus the
+// Git Bash, Cygwin and GVfs forms of a Windows or network path. Names a drive
+// is likely to hold too (Applications, Library, System) are left out.
+const COMPUTER_ROOTS = new RegExp(String.raw`^[\\/](?:Users|Volumes|home|root|private|mnt|usr|var|etc|tmp|opt`
+    + String.raw`|cygdrive[\\/][a-zA-Z]|run[\\/]user[\\/]\d+`
+    + String.raw`|[a-z][\\/](?:Users|Program Files|ProgramData|Windows))[\\/]`);
 const COMPUTER_MEDIA = /^[\\/](?:run[\\/])?media[\\/]/;
-const HOME_SHORTHAND = /^(?:~|\$\{?HOME\b|%[A-Za-z_][A-Za-z0-9_]*%)/;
+// ~, ~/x and ~user/x, $HOME, ${HOME}, $env:NAME and a whole %NAME% segment.
+const HOME_SHORTHAND = /^(?:~(?:[\\/]|$)|~[A-Za-z_][\w.-]*[\\/]|\$\{?HOME\b|\$env:[A-Za-z_]\w*|%[A-Za-z_]\w*%(?:[\\/]|$))/;
 
-/** True for text shaped like a macOS or Linux path copied from this computer. */
+/** True for text shaped like a path copied from this computer, minus a drive letter. */
 function looksLikeComputerPath(value: string, segmentCount: number): boolean {
     if (HOME_SHORTHAND.test(value)) return true;
     if (COMPUTER_ROOTS.test(value)) return segmentCount >= 2;

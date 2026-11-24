@@ -63,7 +63,8 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('  \n ')).toEqual({ kind: 'empty' });
         expect(parseDrivePath('""')).toEqual({ kind: 'empty' });
         expect(parseDrivePath('https://t.me/c/1/2')).toEqual({ kind: 'link' });
-        expect(parseDrivePath('file:///home/me')).toEqual({ kind: 'link' });
+        expect(parseDrivePath('file:///home/me')).toEqual({ kind: 'local' });
+        expect(parseDrivePath('FILE://server/share')).toEqual({ kind: 'local' });
         expect(parseDrivePath('C:\\Users\\me')).toEqual({ kind: 'local' });
         expect(parseDrivePath('"d:/Photos"')).toEqual({ kind: 'local' });
         expect(parseDrivePath('\\\\server\\share')).toEqual({ kind: 'local' });
@@ -71,18 +72,20 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('x'.repeat(5000))).toEqual({ kind: 'too-long' });
     });
 
-    it('flags macOS and Linux paths copied from this computer', () => {
+    it('flags paths copied from this computer that carry no drive letter', () => {
         for (const text of [
-            '/Users/me/Taxes', '"/Volumes/Backup/Docs"', '/home/me', '/private/var/tmp', '/tmp/x',
-            '~', '~/Documents', '~me/Docs', '$HOME/Docs', '${HOME}/Docs', '%USERPROFILE%\\Docs',
-            '/media/me/usb', '/run/media/me/usb',
+            '/Users/me/Taxes', '"/Volumes/Backup/Docs"', '/home/me', '/root/x', '/private/var/tmp', '/tmp/x',
+            '~', '~/Documents', '~me/Docs', '$HOME/Docs', '${HOME}/Docs', '%USERPROFILE%\\Docs', '%APPDATA%',
+            '$env:USERPROFILE\\Documents', '/media/me/usb', '/run/media/me/usb', '/run/user/1000/gvfs/x',
+            '/c/Users/Alex/Docs', '/d/Program Files/App', '/cygdrive/c/Users', '/mnt/c/Users/Alex',
         ]) {
             expect(parsed(text).localHint, text).toBe(true);
         }
         for (const text of [
             '/Users', '/users/me', 'Users/me', '/Applications/Acme', '/Library/x', '/media/usb',
             '/run/x/y', '/Team/Projects', '/~/x', 'My Drive / Users / me', '/Homework/x',
-            '/Users/', '/home/', '/tmpfiles/x', '/Userspace/x',
+            '/Users/', '/home/', '/tmpfiles/x', '/Userspace/x', '~tmp', '~$Report.docx',
+            '%Sales% growth/x', '/c/Team/x', '/run/user/me/x', '/cygdrive/x',
         ]) {
             expect(parsed(text).localHint, text).toBeUndefined();
         }
