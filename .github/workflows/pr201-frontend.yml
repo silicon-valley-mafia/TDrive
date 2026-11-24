@@ -1,0 +1,90 @@
+name: PR201 frontend checks
+
+# Test-only workflow on the fork branch ci/pr201-frontend. Never part of PR #201.
+# Each check reports its log tail as an annotation so results can be read
+# through the API without downloading logs.
+
+on:
+  push:
+    branches:
+      - ci/pr201-frontend
+  workflow_dispatch:
+  repository_dispatch:
+    types: [pr201-frontend]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: typecheck lint vitest build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: checks
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -u
+          report() {
+            local name="$1" status="$2" log="$3" kind="notice"
+            [ "$status" -ne 0 ] && kind="error"
+            local body
+            body=$(tail -c 6000 "$log" | sed -e 's/\x1b\[[0-9;]*m//g' | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::${kind} title=${name} exit ${status}::${body}"
+          }
+          overall=0
+          for step in typecheck lint test:coverage build; do
+            log="$RUNNER_TEMP/${step//:/_}.log"
+            npm run "$step" > "$log" 2>&1
+            status=$?
+            cat "$log"
+            report "$step" "$status" "$log"
+            [ "$status" -ne 0 ] && overall=1
+          done
+          exit $overall
+
+  e2e:
+    name: playwright chromium
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: install chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: e2e
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -u
+          report() {
+            local name="$1" status="$2" log="$3" kind="notice"
+            [ "$status" -ne 0 ] && kind="error"
+            local body
+            body=$(tail -c 6000 "$log" | sed -e 's/\x1b\[[0-9;]*m//g' | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::${kind} title=${name} exit ${status}::${body}"
+          }
+          log="$RUNNER_TEMP/e2e.log"
+          npm run test:e2e -- --project=chromium --reporter=line > "$log" 2>&1
+          status=$?
+          cat "$log"
+          report "e2e chromium" "$status" "$log"
+          exit $status
