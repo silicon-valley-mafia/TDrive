@@ -1,8 +1,8 @@
 name: PR201 frontend checks
 
 # Test-only workflow on the fork branch ci/pr201-frontend. Never part of PR #201.
-# Each check reports its log tail as an annotation so results can be read
-# through the API without downloading logs.
+# Run 1 (typecheck, lint, vitest, build, chromium e2e) passed; this run covers
+# the WebKit jobs: visual baselines and media on macOS, gallery on Linux.
 
 on:
   push:
@@ -16,9 +16,9 @@ permissions:
   contents: read
 
 jobs:
-  unit:
-    name: typecheck lint vitest build
-    runs-on: ubuntu-22.04
+  webkit-media:
+    name: webkit media and visual (macOS)
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -30,61 +30,58 @@ jobs:
       - name: npm ci
         working-directory: frontend
         run: npm ci
-      - name: checks
+      - name: install webkit
+        working-directory: frontend
+        run: npx playwright install webkit
+      - name: e2e webkit-media
         working-directory: frontend
         shell: bash
         run: |
           set -u
-          report() {
-            local name="$1" status="$2" log="$3" kind="notice"
-            [ "$status" -ne 0 ] && kind="error"
-            local body
-            body=$(tail -c 6000 "$log" | sed -e 's/\x1b\[[0-9;]*m//g' | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::${kind} title=${name} exit ${status}::${body}"
-          }
-          overall=0
-          for step in typecheck lint test:coverage build; do
-            log="$RUNNER_TEMP/${step//:/_}.log"
-            npm run "$step" > "$log" 2>&1
-            status=$?
-            cat "$log"
-            report "$step" "$status" "$log"
-            [ "$status" -ne 0 ] && overall=1
-          done
-          exit $overall
-
-  e2e:
-    name: playwright chromium
-    runs-on: ubuntu-22.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: npm ci
-        working-directory: frontend
-        run: npm ci
-      - name: install chromium
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
-      - name: e2e
-        working-directory: frontend
-        shell: bash
-        run: |
-          set -u
-          report() {
-            local name="$1" status="$2" log="$3" kind="notice"
-            [ "$status" -ne 0 ] && kind="error"
-            local body
-            body=$(tail -c 6000 "$log" | sed -e 's/\x1b\[[0-9;]*m//g' | sed -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::${kind} title=${name} exit ${status}::${body}"
-          }
           log="$RUNNER_TEMP/e2e.log"
-          npm run test:e2e -- --project=chromium --reporter=line > "$log" 2>&1
+          npm run test:e2e -- --project=webkit-media --reporter=line > "$log" 2>&1
           status=$?
           cat "$log"
-          report "e2e chromium" "$status" "$log"
+          kind=notice; [ "$status" -ne 0 ] && kind=error
+          body=$(grep -v '^\[[0-9]*/[0-9]*\]' "$log" | tail -c 7000 | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::${kind} title=webkit-media exit ${status}::${body}"
+          exit $status
+      - name: upload failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: webkit-media-failures
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gallery-webkit:
+    name: webkit gallery (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+      - name: install webkit
+        working-directory: frontend
+        run: npx playwright install --with-deps webkit
+      - name: gallery
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -u
+          log="$RUNNER_TEMP/gallery.log"
+          npx playwright test --config playwright.gallery-webkit.config.ts --reporter=line > "$log" 2>&1
+          status=$?
+          cat "$log"
+          kind=notice; [ "$status" -ne 0 ] && kind=error
+          body=$(grep -v '^\[[0-9]*/[0-9]*\]' "$log" | tail -c 7000 | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::${kind} title=gallery webkit exit ${status}::${body}"
           exit $status
