@@ -81,7 +81,8 @@ jobs:
           job_id="$(jq -r '.id' <<<"$target")"
 
           if [[ "$job_conclusion" == "success" ]]; then
-            echo "Windows Store sideload package succeeded in run $run_id."
+            echo "Windows Store sideload package succeeded in run $run_id; disabling this retry controller."
+            gh api --method PUT "repos/$GH_REPO/actions/workflows/retry-pr1-windows-store.yml/disable"
             exit 0
           fi
           if [[ "$job_status" != "completed" ]]; then
